@@ -7,7 +7,7 @@
 set -e
 cd "$(dirname "$0")/.."
 
-PYTHON="${SPYDER_PYXEL_PYTHON:-/DATA/Python/SmartPython/CachyOS/versions/Spyder/bin/python}"
+PYTHON="${SPYDER_PYXEL_PYTHON:-/DATA/Python/SmartPython/CachyOS/versions/SmartPythonEditor/bin/python}"
 
 export QT_QPA_PLATFORM=offscreen
 export PYTHONPATH="$PWD:$PYTHONPATH"
