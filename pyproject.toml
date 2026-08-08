@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spyder-pyxel"
+version = "1.0.0"
+description = "Docks Pyxel pour Spyder : ecran de jeu et editeur de ressources"
+requires-python = ">=3.9"
+dependencies = ["pyxel>=2.9", "qtpy", "qtawesome"]
+
+# Spyder decouvre les greffons tiers par ce groupe de points d'entree. Le nom du point
+# d'entree DOIT etre identique a l'attribut NAME de la classe : Spyder leve une
+# SpyderAPIError et ignore le greffon si les deux different
+# (spyder/app/find_plugins.py, find_external_plugins).
+[project.entry-points."spyder.plugins"]
+pyxel_game = "spyder_pyxel.spyder.plugin:PyxelGame"
+pyxel_studio = "spyder_pyxel.spyder.plugin_studio:PyxelStudio"
+
+[tool.setuptools.packages.find]
+include = ["spyder_pyxel*"]
