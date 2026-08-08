@@ -1,0 +1,3 @@
+[spyder.plugins]
+pyxel_game = spyder_pyxel.spyder.plugin:PyxelGame
+pyxel_studio = spyder_pyxel.spyder.plugin_studio:PyxelStudio
