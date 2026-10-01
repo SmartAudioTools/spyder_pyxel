@@ -10,12 +10,54 @@ Il ne depend ni de Qt ni de Spyder : il tourne du cote du jeu, et doit rester im
 dans n'importe quel interpreteur ou pyxel est installe.
 """
 
+import contextlib
 import os
 import signal
 import struct
 import sys
+import tempfile
 
 from spyder_pyxel.bridge import protocol
+
+
+#: Lignes que Mesa ecrit sur stderr pendant pyxel.init() sur une carte NVIDIA a pilote
+#: proprietaire : il sonde le GPU, ne lui trouve pas de pilote, puis glvnd passe a l'EGL
+#: NVIDIA. Sans consequence pour le jeu.
+_STDERR_BENIN = ("pci id for fd", "MESA-EGL: warning", "egl: failed to create dri2 screen")
+
+
+@contextlib.contextmanager
+def _stderr_natif_filtre():
+    """Capture le stderr NATIF (descripteur 2) le temps du bloc, et n'en laisse passer
+    que ce qui n'est pas dans _STDERR_BENIN - reecrit sur sys.stderr, donc affiche dans
+    la console comme du texte ordinaire.
+
+    ⚠ POURQUOI : Spyder prend tout ce qui arrive sur le stderr du processus noyau, tant
+    que la console n'est pas affichee, pour une erreur de demarrage - et ARRETE la
+    console (ClientWidget.print_stderr). C'est le cas de celle de Pyxel Studio, creee a
+    l'ouverture d'un .pyxres : les avertissements de Mesa la tuaient (01/10/2026, mesa
+    26.2.2 / nvidia 615.71). EGL_LOG_LEVEL=fatal, essaye d'abord, ne coupait que les
+    lignes « MESA-EGL » : les « pci id for fd » passent par le journal du chargeur de
+    pilotes de Mesa, qu'aucune variable ne regle.
+    """
+    try:
+        sauvegarde = os.dup(2)
+    except OSError:
+        yield
+        return
+    with tempfile.TemporaryFile() as capture:
+        os.dup2(capture.fileno(), 2)
+        try:
+            yield
+        finally:
+            os.dup2(sauvegarde, 2)
+            os.close(sauvegarde)
+            capture.seek(0)
+            texte = capture.read().decode(errors="replace")
+    reste = [ligne for ligne in texte.splitlines()
+             if ligne.strip() and not any(b in ligne for b in _STDERR_BENIN)]
+    if reste:
+        sys.stderr.write("\n".join(reste) + "\n")
 
 
 class _ArretJeuVolontaire(Exception):
@@ -321,7 +363,8 @@ def install(pyxel, publisher, consumer_holder):
         # le bloc de restauration ci-dessous pour le POURQUOI complet).
         sigint_avant = signal.getsignal(signal.SIGINT)
 
-        result = original_init(*args, **kwargs)
+        with _stderr_natif_filtre():
+            result = original_init(*args, **kwargs)
 
         # pyxel.init() installe SON PROPRE gestionnaire SIGINT natif (Rust,
         # pyxel::platform::facade::sigint_handler / SIGINT_RECEIVED - verifie par lecture

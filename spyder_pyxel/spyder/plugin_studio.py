@@ -16,6 +16,7 @@ import os
 
 import qtawesome as qta
 
+from spyder.api.plugin_registration.decorators import on_plugin_available
 from spyder.api.plugins import Plugins
 from spyder.utils.icon_manager import ima
 
@@ -47,7 +48,8 @@ class PyxelStudio(PyxelPanePlugin):
     NAME = "pyxel_studio"  # doit etre identique au nom du point d'entree
     # Le greffon du repertoire de travail sert au dialogue "nouveau fichier" : il
     # propose le dossier courant de Spyder. Optionnel — sans lui on retombe sur os.getcwd.
-    OPTIONAL = [Plugins.WorkingDirectory]
+    # Application : pour faire apparaitre les .pyxres dans Fichier > Ouvrir.
+    OPTIONAL = [Plugins.WorkingDirectory, Plugins.Application]
     WIDGET_CLASS = PyxelStudioWidget
     CONF_SECTION = STUDIO_CONF_SECTION
     CONF_DEFAULTS = STUDIO_CONF_DEFAULTS
@@ -72,6 +74,32 @@ class PyxelStudio(PyxelPanePlugin):
         self._studio_shellwidget = None
         # Fichier a ouvrir des que le crochet sera pose dans cette console.
         self._pending = None
+
+    @on_plugin_available(plugin=Plugins.Application)
+    def on_application_available(self):
+        """Rend les .pyxres visibles dans le dialogue Fichier > Ouvrir.
+
+        FILE_EXTENSIONS aiguille bien l'ouverture vers ce panneau, mais Spyder ne s'en
+        sert pas pour construire les filtres du dialogue : celui-ci s'ouvre sur « fichiers
+        texte pris en charge », d'ou les .pyxres etaient absents (constate le 01/10/2026).
+        Le conteneur d'Application calcule ces filtres paresseusement et les garde dans
+        edit_filetypes / edit_filters : on les lui fournit d'avance, completes. Attributs
+        internes - si une version de Spyder les renomme, on ne fait rien plutot que planter.
+        On complete ceux qu'un autre greffon a pu y poser (spyder_smartteacher, pour les
+        .qcm) au lieu de repartir de zero : sinon le dernier charge efface les autres.
+        """
+        from spyder.config.utils import _get_filters, get_edit_filetypes
+
+        container = self.get_plugin(Plugins.Application).get_container()
+        if not (hasattr(container, "edit_filetypes")
+                and hasattr(container, "edit_filters")):
+            return
+        filetypes = list(container.edit_filetypes or get_edit_filetypes())
+        titre, extensions = filetypes[0]
+        filetypes[0] = (titre, tuple(extensions) + tuple(self.FILE_EXTENSIONS))
+        filetypes.append((_("Ressources Pyxel"), tuple(self.FILE_EXTENSIONS)))
+        container.edit_filetypes = filetypes
+        container.edit_filters = _get_filters(filetypes)
 
     # --- Ouverture d'un fichier de ressources --------------------------------
 
