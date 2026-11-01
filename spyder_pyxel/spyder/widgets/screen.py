@@ -5,7 +5,7 @@ Le widget qui affiche l'ecran Pyxel et lui renvoie les entrees clavier/souris.
 
 import os
 
-from qtpy.QtCore import QRect, QRectF, Qt, Signal
+from qtpy.QtCore import QEvent, QRect, QRectF, Qt, Signal
 from qtpy.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
 from qtpy.QtWidgets import QSizePolicy, QWidget
 
@@ -349,10 +349,34 @@ class PyxelScreenWidget(QWidget):
         if getattr(self, "_border_color", None) is None:
             return None
         rayon = getattr(self, "_border_radius", 4)
+        # Coins hauts CARRES sous un flanc d'onglet sans conge, comme les autres cadres
+        # de Spyder : la barre (TabBar, patch_spyder_arrondi_onglet.py du generator) pose
+        # smartos_coin_gauche / smartos_coin_droit sur la page courante - cet ecran.
+        # Sans cela, sous le premier onglet actif, le flanc descendait droit sur un
+        # arrondi qui en decrochait (01/11/2026).
+        gauche = 0.0 if self.property("smartos_coin_gauche") else rayon
+        droite = 0.0 if self.property("smartos_coin_droit") else rayon
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         chemin = QPainterPath()
-        chemin.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5),
-                              rayon, rayon)
+        chemin.moveTo(r.left(), r.top() + gauche)
+        chemin.arcTo(r.left(), r.top(), 2 * gauche, 2 * gauche, 180, -90)
+        chemin.lineTo(r.right() - droite, r.top())
+        chemin.arcTo(r.right() - 2 * droite, r.top(), 2 * droite, 2 * droite, 90, -90)
+        chemin.lineTo(r.right(), r.bottom() - rayon)
+        chemin.arcTo(r.right() - 2 * rayon, r.bottom() - 2 * rayon, 2 * rayon, 2 * rayon,
+                     0, -90)
+        chemin.lineTo(r.left() + rayon, r.bottom())
+        chemin.arcTo(r.left(), r.bottom() - 2 * rayon, 2 * rayon, 2 * rayon, 270, -90)
+        chemin.closeSubpath()
         return chemin
+
+    def event(self, evenement):
+        # Les proprietes de coin changent sans repeinture : sans jeu en cours, l'ecran
+        # garderait l'ancien coin jusqu'a la prochaine image.
+        if (evenement.type() == QEvent.DynamicPropertyChange
+                and bytes(evenement.propertyName()).startswith(b"smartos_coin_")):
+            self.update()
+        return super().event(evenement)
 
     def _paint_edge_bleed(self, painter, left, top, width, height):
         """Comble les bandes en etirant la colonne (ou la ligne) de bord de l'image.
@@ -396,9 +420,8 @@ class PyxelScreenWidget(QWidget):
         painter.setBrush(Qt.NoBrush)
         # Un demi-pixel de retrait : sans lui, un trait de largeur 1 deborde du
         # rectangle et se fait rogner d'un cote.
-        rectangle = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        painter.drawRoundedRect(rectangle, getattr(self, "_border_radius", 4),
-                                getattr(self, "_border_radius", 4))
+        # (le retrait est dans _chemin_du_cadre, meme contour que le rognage)
+        painter.drawPath(self._chemin_du_cadre())
         painter.restore()
 
     # --- Souris ------------------------------------------------------------

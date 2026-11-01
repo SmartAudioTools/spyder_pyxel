@@ -403,7 +403,17 @@ def test_deux_editeurs_ont_chacun_leur_onglet():
     onglets = widget._tabs
     rendu = onglets.grab().toImage()
     largeur, hauteur = onglets.width(), onglets.height()
-    haut_cadre = onglets.tabBar().height()
+    # Le haut du cadre se LIT sur la page, il ne se deduit pas de la barre : la feuille
+    # de Spyder remonte la page de 1 px sous elle (`::pane top: -1px`), et lire a
+    # tabBar().height() tombait sous le trait (echec constate le 01/11/2026).
+    # Idem pour les trois autres cotes : le conteneur garde la bordure (transparente) des
+    # autres volets, le cadre est donc 1 px a l'interieur a gauche et en bas.
+    from qtpy.QtCore import QPoint
+    page = onglets.currentWidget()
+    origine = page.mapTo(onglets, QPoint(0, 0))
+    gauche_cadre, haut_cadre = origine.x(), origine.y()
+    droite_cadre = gauche_cadre + page.width() - 1
+    bas_cadre = haut_cadre + page.height() - 1
     bordure = SpyderPalette.COLOR_BACKGROUND_4.lower()
 
     def ton(x, y):
@@ -413,9 +423,9 @@ def test_deux_editeurs_ont_chacun_leur_onglet():
     # Le theme global seul dessinait les cotes mais PAS la ligne du haut.
     cotes = {
         "bord haut": ton(largeur // 2, haut_cadre),
-        "bord bas": ton(largeur // 2, hauteur - 1),
-        "bord gauche": ton(0, (haut_cadre + hauteur) // 2),
-        "bord droit": ton(largeur - 1, (haut_cadre + hauteur) // 2),
+        "bord bas": ton(largeur // 2, bas_cadre),
+        "bord gauche": ton(gauche_cadre, (haut_cadre + bas_cadre) // 2),
+        "bord droit": ton(droite_cadre, (haut_cadre + bas_cadre) // 2),
     }
     fautifs = {nom: vu for nom, vu in cotes.items() if vu != bordure}
     assert not fautifs, (
@@ -449,11 +459,24 @@ def test_deux_editeurs_ont_chacun_leur_onglet():
         return total
 
     arcs = {
-        "coin haut-gauche": pixels_de_bordure(0, haut_cadre, 1, 1),
-        "coin haut-droit": pixels_de_bordure(largeur - 1, haut_cadre, -1, 1),
-        "coin bas-gauche": pixels_de_bordure(0, hauteur - 1, 1, -1),
-        "coin bas-droit": pixels_de_bordure(largeur - 1, hauteur - 1, -1, -1),
+        "coin haut-gauche": pixels_de_bordure(gauche_cadre, haut_cadre, 1, 1),
+        "coin haut-droit": pixels_de_bordure(droite_cadre, haut_cadre, -1, 1),
+        "coin bas-gauche": pixels_de_bordure(gauche_cadre, bas_cadre, 1, -1),
+        "coin bas-droit": pixels_de_bordure(droite_cadre, bas_cadre, -1, -1),
     }
+    # SOUS LE PREMIER ONGLET ACTIF, le coin haut-gauche est CARRE (01/11/2026, comme tous
+    # les cadres de Spyder) : son flanc descend droit, un arrondi en decrocherait. Ses
+    # deux premieres lignes sont sous l'onglet : on verifie le trait gauche juste dessous,
+    # pixel de la colonne du cadre au ton exact de la bordure, et le flanc dans l'axe.
+    assert onglets.currentIndex() == 0 and page.property("smartos_coin_gauche"), (
+        "le premier onglet est actif : la barre doit avoir demande un coin gauche carre")
+    sous_l_onglet = [ton(gauche_cadre, y) for y in range(haut_cadre + 2, haut_cadre + 6)]
+    assert set(sous_l_onglet) == {bordure}, (
+        f"coin haut-gauche : trait gauche attendu {bordure} jusqu'en haut, vu {sous_l_onglet}")
+    flanc = ton(gauche_cadre, haut_cadre)
+    assert flanc not in (bordure, ton_fond.name().lower()), (
+        f"le flanc de l'onglet doit tomber sur la colonne du cadre, vu {flanc}")
+    del arcs["coin haut-gauche"]
     # Seuil a 7 : l'arc complet en donne 9 a 10 ; recouvert par la page il en reste 4,
     # aux seules extremites. C'est ce que "il manque des bouts" designait.
     creves = {nom: n for nom, n in arcs.items() if n < 7}
@@ -462,14 +485,16 @@ def test_deux_editeurs_ont_chacun_leur_onglet():
         "attendus. Qt place la page d'onglet sans tenir compte du RAYON : un enfant "
         "opaque peint alors par-dessus l'arc. C'est le 'padding' de QTabWidget::pane qui "
         "l'en empeche - ne pas le retirer.")
-    print(f"OK  cadre complet : quatre cotes a {bordure}, quatre coins arrondis "
-          f"({min(arcs.values())} a {max(arcs.values())} pixels d'arc)")
+    print(f"OK  cadre complet : quatre cotes a {bordure}, coin haut-gauche carre sous le "
+          f"premier onglet, trois coins arrondis ({min(arcs.values())} a "
+          f"{max(arcs.values())} pixels d'arc)")
 
-    # -- LE LISERE D'ACCENTUATION SOUS L'ONGLET ACTIF, celui de qdarkstyle :
-    #       QTabBar::tab:top:selected { border-bottom: 3px solid #259AE9; }
-    #    Il fonctionne SANS RIEN FAIRE, la feuille globale de Spyder s'en charge. Ce test
-    #    est la pour qu'une feuille posee sur les onglets ne le tue pas un jour sans qu'on
-    #    s'en apercoive.
+    # -- L'ONGLET ACTIF SE DISTINGUE DES AUTRES. Le liseré bleu de qdarkstyle sous
+    #    l'onglet actif n'existe plus : la charte SmartOS (patch_spyder_colors.py du
+    #    generator, 12/10/2026) le retire de tous les volets et donne a l'onglet actif le
+    #    fond de l'editeur, borde comme le cadre. Ce controle reste la pour qu'une feuille
+    #    posee sur les onglets n'ecrase pas un jour la regle globale ::tab:selected.
+    #    (Ancienne version : trois pixels #259ae9 attendus - echouait depuis le 12/10.)
     #
     #    ⚠ MESURER SUR LA BARRE D'ONGLETS, PAS SUR LE WIDGET D'ONGLETS : tabRect() est en
     #    coordonnees de la BARRE, qui est decalee a l'interieur du QTabWidget. Sonder
@@ -478,22 +503,16 @@ def test_deux_editeurs_ont_chacun_leur_onglet():
     barre = widget._tabs.tabBar()
     rendu_barre = barre.grab().toImage()
 
-    def bas_de_l_onglet(index):
+    def fond_de_l_onglet(index):
         r = barre.tabRect(index)
-        return [rendu_barre.pixelColor(r.center().x(), y).name().lower()
-                for y in range(r.bottom() - 2, r.bottom() + 1)]
+        return rendu_barre.pixelColor(r.center().x(), r.bottom() - 3).name().lower()
 
-    accent = "#259ae9"
-    actif = bas_de_l_onglet(widget._tabs.currentIndex())
-    autre = bas_de_l_onglet(1 - widget._tabs.currentIndex())
-    assert actif == [accent] * 3, (
-        f"pas de lisere sous l'onglet actif : {actif}, attendu trois pixels {accent}. "
-        "Une feuille de style posee sur les onglets a sans doute ecrase la regle "
-        "QTabBar::tab:top:selected de la feuille globale.")
-    assert accent not in autre, (
-        f"l'onglet INACTIF porte le lisere ({autre}) : on ne distingue plus lequel est "
-        "actif")
-    print(f"OK  lisere {accent} sous l'onglet actif, et lui seul")
+    actif = fond_de_l_onglet(widget._tabs.currentIndex())
+    autre = fond_de_l_onglet(1 - widget._tabs.currentIndex())
+    assert actif != autre, (
+        f"onglet actif et inactif ont le meme fond ({actif}) : une feuille de style posee "
+        "sur les onglets a sans doute ecrase la regle QTabBar::tab:selected globale.")
+    print(f"OK  onglet actif sur fond {actif}, l'autre sur {autre}")
 
     # -- LE CADRE PASSE AU BLEU VIF QUAND LE PANNEAU A LE CLAVIER.
     #    Convention de Spyder, posee EN CODE et non dans une feuille de style - on la
@@ -505,7 +524,7 @@ def test_deux_editeurs_ont_chacun_leur_onglet():
     def ton_du_cadre():
         image = onglets.grab().toImage()
         return image.pixelColor(
-            0, (onglets.tabBar().height() + onglets.height()) // 2).name().lower()
+            gauche_cadre, (haut_cadre + bas_cadre) // 2).name().lower()
 
     ecran_courant = widget._tabs.currentWidget()
     ecran_courant.setFocus()

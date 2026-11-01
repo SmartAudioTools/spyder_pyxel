@@ -627,8 +627,13 @@ class PyxelStudioWidget(PyxelPaneWidget):
         # des 44 px des autres panneaux (mesure du 26/07/2026 — la regle
         # `QTabBar#pane-tabbar { height: 37px }` de Spyder ne s'appliquait plus).
         # Depuis le panneau, avec un selecteur nomme, la feuille globale reste en place.
+        # Bordure TRANSPARENTE et non `border: 0` (01/11/2026) : sa largeur garde la page a
+        # la place qu'elle a dans les autres volets, 1 px a l'interieur a gauche et en bas.
+        # Avec `border: 0`, l'ecran collait au bord gauche du conteneur et son cadre
+        # tombait 1 px a gauche du flanc du premier onglet (mesure : flanc en x=1, cadre
+        # en x=0 ; volet Spyder ordinaire : les deux en x=1).
         self._tabs.setObjectName("pyxel_studio_tabs")
-        self.setStyleSheet("QTabWidget#pyxel_studio_tabs::pane { border: 0; }")
+        self.setStyleSheet("QTabWidget#pyxel_studio_tabs::pane { border-color: transparent; }")
         self._appliquer_cadre_aux_ecrans(focus=False)
         self._garder_la_barre_du_coin_masquee()
         # La classe de base a montre la barre (ALWAYS_SHOW_TABS) : on tranche nous-memes,
@@ -806,6 +811,7 @@ class PyxelStudioWidget(PyxelPaneWidget):
         barre = self._tabs.tabBar()
         avec_fichiers = bool(self._screens)
         barre.setVisible(avec_fichiers)
+        self._feuille_du_cadre(avec_barre=avec_fichiers)
         # ⚠ MASQUER LA BARRE NE DOIT PAS FAIRE MONTER LE CADRE. Sans la marge, la page
         # d'onglet recupere la hauteur liberee et le cadre du panneau devient plus haut
         # que celui des autres panneaux (defaut signale par l'utilisateur le 26/07/2026).
@@ -820,12 +826,34 @@ class PyxelStudioWidget(PyxelPaneWidget):
         # on part de la valeur mesuree sur ce theme tant que ce n'est pas arrive.
         if avec_fichiers and barre.height() > 0:
             self._hauteur_barre = barre.height()
+        # Le -1 : barre affichee, la page remonte de 1 px sous elle (`::pane top: -1px`) ;
+        # sans barre on annule cette remontee (_feuille_du_cadre), on la reporte donc ici
+        # pour que le trait haut du cadre reste sur la meme ligne (01/11/2026).
         hauteur = 0 if avec_fichiers else getattr(
-            self, "_hauteur_barre", self.HAUTEUR_BARRE_MESUREE)
+            self, "_hauteur_barre", self.HAUTEUR_BARRE_MESUREE) - 1
         marges = self._layout.contentsMargins()
         self._layout.setContentsMargins(marges.left(), hauteur,
                                         marges.right(), marges.bottom())
         self._placer_bouton_nouveau()
+
+    def _feuille_du_cadre(self, avec_barre):
+        """Sans barre, la page d'onglets reste DANS le conteneur.
+
+        La feuille des volets de Spyder (PANES_TABBAR_STYLESHEET, posee par Tabs sur le
+        conteneur lui-meme, donc prioritaire sur celle du panneau) remonte la page de 1 px
+        (`::pane { top: -1px }`, patch_spyder_colors.py) pour que l'onglet actif recouvre
+        le trait haut du cadre. Barre MASQUEE (aucun fichier), cette remontee sort la
+        premiere ligne de l'ecran du conteneur, qui la coupe : l'accueil n'avait plus de
+        bord haut (signale par l'utilisateur le 01/11/2026 ; mesure : ecran en y=43,
+        conteneur en y=44). On AJOUTE donc `top: 0px` a la feuille du conteneur, sans
+        la remplacer (la remplacer fait retomber la barre a 29 px, cf. __init__).
+        """
+        base = getattr(self, "_feuille_conteneur", None)
+        if base is None:
+            base = self._feuille_conteneur = self._tabs.styleSheet()
+        feuille = base if avec_barre else base + "\nQTabWidget::pane { top: 0px; }\n"
+        if self._tabs.styleSheet() != feuille:   # reposer une feuille repolit tout
+            self._tabs.setStyleSheet(feuille)
 
     def _on_frame(self, kind, frame, channel):
         """Ignore les images d'un canal ferme — sauf si un NOUVEAU programme y demarre.
