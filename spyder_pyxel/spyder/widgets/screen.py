@@ -98,6 +98,8 @@ class PyxelScreenWidget(QWidget):
         self.edge_bleed = False
         # Image collee au bord HAUT plutot que centree verticalement (cf. set_align_top).
         self.align_top = False
+        # Cadre trace au ras de l'IMAGE plutot qu'autour du widget (cf. set_border_hugs_image).
+        self.border_hugs_image = False
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -162,6 +164,27 @@ class PyxelScreenWidget(QWidget):
         if enabled != self.align_top:
             self.align_top = enabled
             self._display_rect = None
+            self.update()
+
+    def set_border_hugs_image(self, enabled):
+        """Trace le cadre (set_border_color) au RAS DE L'IMAGE, et non autour du widget.
+
+        Demande de l'utilisateur le 12/11/2026, pour le panneau du jeu : « ce qui fait
+        bizarre c'est les bandes noires au-dessus et en dessous du jeu quand on met un
+        cadre ». Autour du widget, le cadre enfermait aussi les bandes laissees par la
+        conservation des proportions ; au ras de l'image, il n'entoure que le jeu.
+        Quatre coins arrondis, quelles que soient les proprietes smartos_coin_* (qui ne
+        valent que pour un cadre colle sous la barre d'onglets) : le trait et le
+        rognage passent sur la premiere rangee de pixels de l'image, et les coins
+        perdent les quelques pixels qui sortent de l'arrondi (accepte par
+        l'utilisateur). Les bords etires (set_edge_bleed) ont ete ecartes pour ce
+        panneau : « degueulasse ».
+
+        Sans image (message d'accueil), le cadre reste autour du widget.
+        """
+        enabled = bool(enabled)
+        if enabled != self.border_hugs_image:
+            self.border_hugs_image = enabled
             self.update()
 
     def set_placeholder(self, text):
@@ -304,7 +327,10 @@ class PyxelScreenWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), letterbox_color())
-        self._paint_border(painter)
+        if not (self.border_hugs_image and self._image is not None):
+            # Au ras de l'image, le trait est DANS l'image : peint ici, il serait
+            # aussitot recouvert par elle.
+            self._paint_border(painter)
 
         if self._image is None:
             if self._placeholder:
@@ -323,7 +349,8 @@ class PyxelScreenWidget(QWidget):
         # l'utilisateur le 26/07/2026). Le rognage se pose ICI et non autour du seul
         # etirement : l'image elle-meme deborde de la meme facon des qu'elle touche un
         # coin, ce qui est le cas des qu'elle remplit le panneau.
-        chemin = self._chemin_du_cadre()
+        coins = self._coins_hors_cadre(geometry)
+        chemin = None if coins is not None else self._chemin_du_cadre()
         if chemin is not None:
             painter.setClipPath(chemin)
         if self.edge_bleed:
@@ -334,6 +361,12 @@ class PyxelScreenWidget(QWidget):
         # donc l'agrandissement se fait au plus proche voisin : des pixels nets, ce qui
         # est tout l'interet d'un moteur retro.
         painter.drawImage(QRect(left, top, width, height), self._image)
+        if coins is not None:
+            # Au ras de l'image : PAS de rognage de toute l'image (environ 3 ms par
+            # image de plus sur 1280x900, mesure du 12/11/2026, bench_cadre.py dans
+            # SmartPythonEditor_generator_essais/pyxel_cadre/) ; on repeint seulement les
+            # quatre coins exterieurs a l'arrondi, de la couleur des bandes.
+            painter.fillPath(coins, letterbox_color())
         # Le cadre EN DERNIER, et HORS rognage : l'image vient d'etre peinte par-dessus
         # tout le rectangle, y compris la ou passe la bordure. Son trait antialiase
         # recouvre du meme coup l'escalier laisse par le rognage, que Qt ne lisse pas.
@@ -349,6 +382,17 @@ class PyxelScreenWidget(QWidget):
         if getattr(self, "_border_color", None) is None:
             return None
         rayon = getattr(self, "_border_radius", 4)
+        geometrie = (self._display_geometry()
+                     if self.border_hugs_image and self._image is not None else None)
+        if geometrie is not None:
+            # Au ras de l'image (set_border_hugs_image) : quatre coins arrondis, le
+            # rayon borne a la moitie du petit cote pour une image minuscule.
+            left, top, width, height = geometrie
+            r = QRectF(left, top, width, height).adjusted(0.5, 0.5, -0.5, -0.5)
+            rayon = max(0.0, min(rayon, r.width() / 2, r.height() / 2))
+            chemin = QPainterPath()
+            chemin.addRoundedRect(r, rayon, rayon)
+            return chemin
         # Coins hauts CARRES sous un flanc d'onglet sans conge, comme les autres cadres
         # de Spyder : la barre (TabBar, patch_spyder_arrondi_onglet.py du generator) pose
         # smartos_coin_gauche / smartos_coin_droit sur la page courante - cet ecran.
@@ -369,6 +413,23 @@ class PyxelScreenWidget(QWidget):
         chemin.arcTo(r.left(), r.bottom() - 2 * rayon, 2 * rayon, 2 * rayon, 270, -90)
         chemin.closeSubpath()
         return chemin
+
+    def _coins_hors_cadre(self, geometrie):
+        """Les quatre coins de l'image hors de l'arrondi du cadre, `None` hors du mode au ras.
+
+        Mis en cache par geometrie et rayon : le chemin ne change qu'au redimensionnement.
+        """
+        if (not self.border_hugs_image or self._image is None
+                or getattr(self, "_border_color", None) is None):
+            return None
+        cle = (tuple(geometrie), getattr(self, "_border_radius", 4))
+        cache = getattr(self, "_cache_coins", None)
+        if cache is None or cache[0] != cle:
+            rectangle = QPainterPath()
+            rectangle.addRect(QRectF(*geometrie))
+            cache = (cle, rectangle.subtracted(self._chemin_du_cadre()))
+            self._cache_coins = cache
+        return cache[1]
 
     def event(self, evenement):
         # Les proprietes de coin changent sans repeinture : sans jeu en cours, l'ecran
@@ -421,8 +482,55 @@ class PyxelScreenWidget(QWidget):
         # Un demi-pixel de retrait : sans lui, un trait de largeur 1 deborde du
         # rectangle et se fait rogner d'un cote.
         # (le retrait est dans _chemin_du_cadre, meme contour que le rognage)
-        painter.drawPath(self._chemin_du_cadre())
+        anneau = self._anneau_sur_l_image()
+        if anneau is None:
+            painter.drawPath(self._chemin_du_cadre())
+        else:
+            # TRAIT DE 2 PX au ras de l'image (12/11/2026) : en 1 px il « se voit a peine
+            # car l'image est claire et le fond fonce » (l'utilisateur ; lisere sombre
+            # refuse). Tout DANS l'image : sur l'axe ou elle remplit le panneau, un trait
+            # exterieur serait rogne.
+            # Les COTES DROITS en fillRect sans antialiasing, seuls les quatre ARCS
+            # antialiases : le trait antialiase sur tout le pourtour coutait de l'ordre
+            # de la milliseconde par image (bench_cadre.py, 12/11/2026).
+            left, top, width, height = self._display_geometry()
+            rayon = int(round(max(0.0, min(getattr(self, "_border_radius", 4),
+                                           width / 2, height / 2))))
+            couleur_trait = QColor(couleur)
+            painter.fillRect(left + rayon, top, width - 2 * rayon, 2, couleur_trait)
+            painter.fillRect(left + rayon, top + height - 2, width - 2 * rayon, 2,
+                             couleur_trait)
+            painter.fillRect(left, top + rayon, 2, height - 2 * rayon, couleur_trait)
+            painter.fillRect(left + width - 2, top + rayon, 2, height - 2 * rayon,
+                             couleur_trait)
+            if rayon:
+                stylo.setWidthF(2.0)
+                painter.setPen(stylo)
+                r = QRectF(left, top, width, height).adjusted(1.0, 1.0, -1.0, -1.0)
+                d = 2 * (rayon - 0.5)
+                for x, y, angle in ((r.left(), r.top(), 90), (r.right() - d, r.top(), 0),
+                                    (r.right() - d, r.bottom() - d, 270),
+                                    (r.left(), r.bottom() - d, 180)):
+                    painter.drawArc(QRectF(x, y, d, d), angle * 16, 90 * 16)
         painter.restore()
+
+    def _anneau_sur_l_image(self):
+        """Fabrique de contours arrondis en retrait de l'image, `None` hors du mode au ras."""
+        if not self.border_hugs_image or self._image is None:
+            return None
+        geometrie = self._display_geometry()
+        if geometrie is None:
+            return None
+        rayon_cadre = getattr(self, "_border_radius", 4)
+
+        def anneau(retrait):
+            r = QRectF(*geometrie).adjusted(retrait, retrait, -retrait, -retrait)
+            rayon = max(0.0, min(rayon_cadre - (retrait - 0.5),
+                                 r.width() / 2, r.height() / 2))
+            chemin = QPainterPath()
+            chemin.addRoundedRect(r, rayon, rayon)
+            return chemin
+        return anneau
 
     # --- Souris ------------------------------------------------------------
 

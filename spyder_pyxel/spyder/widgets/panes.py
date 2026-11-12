@@ -95,6 +95,8 @@ class PyxelPaneWidget(PluginMainWidget):
         # Mercurial pour le detail de sa mise en place, le 21/07/2026). _apply_tabs_stylesheet
         # ne fait plus que desactiver la bordure du theme global ; elle ne depend donc plus
         # du focus, mais garde son parametre pour ne pas changer la signature.
+        # Depuis le 12/11/2026, le panneau du jeu a de nouveau un cadre, mais trace par
+        # l'ecran AU RAS DE L'IMAGE (cf. PyxelGameWidget) ; le conteneur reste sans bordure.
         self._tabs = self.CLASSE_ONGLETS(self)
         self._apply_tabs_stylesheet(focus=False)
         self._tabs.setMovable(True)
@@ -543,6 +545,33 @@ class PyxelGameWidget(PyxelPaneWidget):
 
     def get_title(self):
         return _("Pyxel")
+
+    # Cadre de focus REMIS le 12/11/2026 (demande de l'utilisateur), mais trace AU RAS DE
+    # L'IMAGE par l'ecran lui-meme (PyxelScreenWidget.set_border_hugs_image), pas autour
+    # du panneau : « ce qui fait bizarre c'est les bandes noires au-dessus et en dessous
+    # du jeu quand on met un cadre ». Le conteneur d'onglets reste sans bordure (feuille
+    # de la classe de base). Gris au repos, bleu au focus, comme Pyxel Studio.
+
+    def _new_screen(self):
+        ecran = super()._new_screen()
+        ecran.set_border_hugs_image(True)
+        # Un ecran cree apres coup (_screen_for, deuxieme programme) prend l'etat courant.
+        self._cadre_sur(ecran, getattr(self, "_cadre_focus", False))
+        return ecran
+
+    @staticmethod
+    def _cadre_sur(ecran, focus):
+        couleur = (SpyderPalette.COLOR_ACCENT_3 if focus
+                   else SpyderPalette.COLOR_BACKGROUND_4)
+        ecran.set_border_color(couleur, SpyderPalette.SIZE_BORDER_RADIUS)
+
+    def _apply_tabs_stylesheet(self, focus):
+        super()._apply_tabs_stylesheet(focus)
+        self._cadre_focus = bool(focus)
+        for index in range(self._tabs.count()):
+            ecran = self._tabs.widget(index)
+            if isinstance(ecran, PyxelScreenWidget):
+                self._cadre_sur(ecran, focus)
 
 
 class PyxelStudioWidget(PyxelPaneWidget):
