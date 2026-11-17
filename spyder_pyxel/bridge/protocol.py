@@ -77,6 +77,9 @@ OFF_PALETTE = 32           # 256 * 4 octets -> occupe jusqu'a 1056
 # 1024, dans la zone reservee a la palette - sans consequence visible, mais une palette
 # etendue l'aurait ecrase silencieusement. L'assertion en fin de module l'a rattrape.
 OFF_KIND = 1088            # nature du programme qui publie (cf. KIND_* ci-dessous)
+# Frequence des balayages que le panneau envoie au jeu, en milli-hertz (0 = aucun : le jeu
+# se cadence sur sa propre horloge). Ecrit par le panneau, lu par hooks.VsyncPacer (W574).
+OFF_DISPLAY_MHZ = 1092
 
 # Valeurs du champ STATE.
 STATE_IDLE = 0       # personne ne publie (pyxel.init() pas encore appele)
@@ -149,6 +152,15 @@ def fifo_path(shm_name):
     import tempfile
 
     return os.path.join(tempfile.gettempdir(), shm_name + ".fifo")
+
+
+def vsync_fifo_path(shm_name):
+    """Tube nomme dans l'AUTRE sens (W574) : le panneau y ecrit un octet a chaque balayage
+    de l'ecran (QOpenGLWidget.frameSwapped), le jeu les compte pour jouer une image tous
+    les round(hz / fps) balayages par pyxel.step(), au lieu du sommeil de pyxel.flip()."""
+    import tempfile
+
+    return os.path.join(tempfile.gettempdir(), shm_name + ".vsync.fifo")
 
 
 def make_shm_name(pid, suffix=""):

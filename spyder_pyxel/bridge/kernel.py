@@ -154,8 +154,17 @@ def install(shm_name):
         except OSError:
             notify_fd = None
         _state["notify_fd"] = notify_fd
+        # W574 : balayages du panneau (lecture), pour cadencer par pyxel.step().
+        tick_fd = None
+        try:
+            path = protocol.vsync_fifo_path(shm_name)
+            if _os.path.exists(path):
+                tick_fd = _os.open(path, _os.O_RDONLY | _os.O_NONBLOCK)
+        except OSError:
+            tick_fd = None
+        _state["tick_fd"] = tick_fd
 
-        _state["publisher"] = hooks.ScreenPublisher(shm.buf, notify_fd)
+        _state["publisher"] = hooks.ScreenPublisher(shm.buf, notify_fd, tick_fd)
         _state["installed"] = True
 
         _install_import_watch()
@@ -176,8 +185,9 @@ def uninstall():
     publisher = _state.get("publisher")
     if publisher is not None:
         publisher.close()
-    fd = _state.get("notify_fd")
-    if fd is not None:
+    for fd in (_state.get("notify_fd"), _state.get("tick_fd")):
+        if fd is None:
+            continue
         try:
             import os as _os
 
@@ -191,7 +201,7 @@ def uninstall():
         except Exception:
             pass
     _state.update({"installed": False, "shm": None, "publisher": None,
-                   "notify_fd": None})
+                   "notify_fd": None, "tick_fd": None})
 
 
 def status():

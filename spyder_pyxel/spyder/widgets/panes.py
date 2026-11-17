@@ -524,6 +524,8 @@ class PyxelPaneWidget(PluginMainWidget):
             self._subscribed = True
         self._update_window_title()
         super().showEvent(event)
+        # W574 : la fenetre qui montre le jeu donne le rythme de l'ecran.
+        self._bridge.start_vsync(self.window().windowHandle())
 
     def hideEvent(self, event):
         if self._subscribed:

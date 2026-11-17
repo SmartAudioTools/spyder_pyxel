@@ -72,8 +72,10 @@ class _ArretJeuVolontaire(Exception):
 class ScreenPublisher:
     """Ecrit l'ecran de Pyxel dans la memoire partagee, une image a la fois."""
 
-    def __init__(self, buffer, notify_fd=None):
+    def __init__(self, buffer, notify_fd=None, tick_fd=None):
         self._buf = buffer
+        # Cote lecture du tube des balayages (W574), lu par VsyncPacer.
+        self.tick_fd = tick_fd
         # Descripteur du tube nomme, ouvert en ecriture NON BLOQUANTE. Non bloquante est
         # essentiel : si le panneau est masque ou en retard, le tube se remplit, et un
         # jeu qui bloquerait sur cette ecriture perdrait des images pour une raison
@@ -154,6 +156,9 @@ class ScreenPublisher:
             except OSError:
                 pass
 
+    def buffer(self):
+        return self._buf
+
     def close(self, state=protocol.STATE_STOPPED):
         if self._buf is None:
             return
@@ -162,6 +167,82 @@ class ScreenPublisher:
         except Exception:
             pass
         self._buf = None
+
+
+class VsyncPacer:
+    """Attend le moment de jouer l'image suivante, a la place du sommeil de pyxel.flip (W574).
+
+    Pyxel 2.9.9 dort dans step_frame (SDL_Delay jusqu'a une grille de 1000/fps ms, sans
+    lien avec l'ecran) : le jeu et le panneau ont deux horloges, et une image reste
+    affichee tantot un balayage, tantot trois. Le panneau envoie donc un octet par
+    balayage reel (VsyncTicker) ; on joue une image tous les round(hz / fps) balayages
+    (2 a 30 i/s sur 60 Hz), puis pyxel.step() - flip SANS sommeil, fork qtpy6-vsync.
+
+    Panneau masque (frequence 0) ou muet plus d'une image et demie : horloge a fps, meme
+    grille que le sommeil d'origine. Jamais d'attente sans borne : le jeu ne se fige pas
+    si le panneau disparait.
+    """
+
+    def __init__(self, buffer, tick_fd, fps):
+        self._buf = buffer
+        self._fd = tick_fd
+        self._fps = max(1, int(fps or 30))
+        self._ticks = 0
+        self._next = None
+        self._muet_jusqua = 0.0
+        # Arriere laisse par le panneau pendant qu'aucun jeu ne lisait (relance dans la
+        # meme console) : sans cette purge, les premieres images partiraient sans attendre.
+        while self._fd is not None and self._read_ticks():
+            pass
+
+    def display_hz(self):
+        if self._buf is None or self._fd is None:
+            return 0.0
+        return struct.unpack_from("<I", self._buf, protocol.OFF_DISPLAY_MHZ)[0] / 1000.0
+
+    def _read_ticks(self):
+        try:
+            return len(os.read(self._fd, 4096))
+        except (BlockingIOError, InterruptedError):
+            return 0
+        except OSError:
+            self._fd = None
+            return 0
+
+    def wait(self):
+        import select
+        import time
+
+        hz = self.display_hz()
+        if hz > 0 and time.monotonic() >= self._muet_jusqua:
+            n = max(1, round(hz / self._fps))
+            delai_ms = 1500.0 * n / hz
+            self._ticks += self._read_ticks()
+            # poll et non select : select refuse un descripteur >= 1024 (ValueError).
+            sonde = select.poll()
+            sonde.register(self._fd, select.POLLIN)
+            while self._ticks < n and self._fd is not None:
+                if not sonde.poll(delai_ms):
+                    # Panneau muet (fenetre reduite...) : horloge pendant une demi-seconde,
+                    # sinon chaque image paierait le delai de garde (20 i/s au lieu de 30).
+                    self._muet_jusqua = time.monotonic() + 0.5
+                    break
+                self._ticks += self._read_ticks()
+            if self._ticks >= n:
+                self._ticks = 0
+                self._next = None
+                return
+        # Horloge : grille de 1/fps avec rattrapage, comme step_frame de Pyxel.
+        self._ticks = 0
+        periode = 1.0 / self._fps
+        maintenant = time.monotonic()
+        if self._next is None:
+            self._next = maintenant + periode
+        elif self._next > maintenant:
+            time.sleep(self._next - maintenant)
+        maintenant = time.monotonic()
+        while self._next <= maintenant:
+            self._next += periode
 
 
 class InputConsumer:
@@ -400,6 +481,13 @@ def install(pyxel, publisher, consumer_holder):
             protocol.KIND_EDITOR if "pyxel.editor" in sys.modules
             else protocol.KIND_GAME)
         consumer_holder["consumer"] = InputConsumer(publisher._buf, pyxel)
+        # W574 : Pyxel du fork qtpy6-vsync (pyxel.step) et tube des balayages present ->
+        # le panneau cadence le jeu. Sinon rien ne change : original_flip et son sommeil.
+        consumer_holder.pop("pacer", None)
+        tick_fd = getattr(publisher, "tick_fd", None)
+        if callable(getattr(pyxel, "step", None)) and tick_fd is not None:
+            fps = kwargs.get("fps", args[3] if len(args) > 3 else 30)
+            consumer_holder["pacer"] = VsyncPacer(publisher._buf, tick_fd, fps)
         # Publier tout de suite : le panneau affiche ainsi l'ecran vide - donc la bonne
         # taille - des l'init, sans attendre la premiere image dessinee.
         publisher.publish(pyxel)
@@ -447,11 +535,17 @@ def install(pyxel, publisher, consumer_holder):
         # panneau) EST le mecanisme documente par pyxel pour ecrire sa propre boucle - deja
         # utilise telle quelle par patched_show ci-dessous. Seule la SORTIE change de
         # comportement (patched_quit, au-dessus) ; cadence et entrees restent au natif.
+        pacer = consumer_holder.get("pacer")
         try:
             while True:
                 wrapped_update()
                 wrapped_draw()
-                original_flip()
+                if pacer is None:
+                    original_flip()
+                else:
+                    # W574 : attendre les balayages du panneau, puis flip sans sommeil.
+                    pacer.wait()
+                    pyxel.step()
         except _ArretJeuVolontaire:
             return
 

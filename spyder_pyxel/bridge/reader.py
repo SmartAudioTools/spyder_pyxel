@@ -41,6 +41,8 @@ class PyxelChannel:
         self._write_index = 0
         self._fifo_path = None
         self._notify_fd = None
+        self._vsync_path = None
+        self._vsync_fd = None
 
     # --- Cycle de vie -------------------------------------------------------
 
@@ -74,7 +76,47 @@ class PyxelChannel:
             # fonctionnel. Mieux vaut ca qu'un panneau qui n'affiche rien.
             self._fifo_path = None
             self._notify_fd = None
+
+        # Tube des balayages (panneau -> jeu, W574). Ouvert en O_RDWR : sur Linux cela ne
+        # bloque pas et ne depend d'aucun lecteur ; si le jeu ne lit pas (Pyxel sans
+        # step, jeu arrete), le tube se remplit et les ecritures echouent en EAGAIN, sans
+        # consequence.
+        struct.pack_into("<I", self._shm.buf, protocol.OFF_DISPLAY_MHZ, 0)
+        self._vsync_path = protocol.vsync_fifo_path(name)
+        try:
+            if os.path.exists(self._vsync_path):
+                os.unlink(self._vsync_path)
+            os.mkfifo(self._vsync_path, 0o600)
+            self._vsync_fd = os.open(self._vsync_path, os.O_RDWR | os.O_NONBLOCK)
+        except OSError:
+            # Tube cree mais non ouvert : on l'efface, release() ne le connaitra pas.
+            try:
+                os.unlink(self._vsync_path)
+            except OSError:
+                pass
+            self._vsync_path = None
+            self._vsync_fd = None
         return name
+
+    @property
+    def vsync_fd(self):
+        return self._vsync_fd
+
+    def send_vsync_tick(self, hz):
+        """Un balayage d'ecran vient d'avoir lieu : frequence publiee, un octet au jeu."""
+        if self._shm is None or self._vsync_fd is None:
+            return
+        struct.pack_into("<I", self._shm.buf, protocol.OFF_DISPLAY_MHZ,
+                         int(round(hz * 1000)))
+        try:
+            os.write(self._vsync_fd, b"\x01")
+        except OSError:
+            pass
+
+    def stop_vsync(self):
+        """Plus de balayages (panneau masque) : le jeu repasse sur son horloge."""
+        if self._shm is not None:
+            struct.pack_into("<I", self._shm.buf, protocol.OFF_DISPLAY_MHZ, 0)
 
     @property
     def notify_fd(self):
@@ -93,6 +135,18 @@ class PyxelChannel:
             pass
 
     def release(self):
+        if self._vsync_fd is not None:
+            try:
+                os.close(self._vsync_fd)
+            except OSError:
+                pass
+            self._vsync_fd = None
+        if self._vsync_path is not None:
+            try:
+                os.unlink(self._vsync_path)
+            except OSError:
+                pass
+            self._vsync_path = None
         if self._notify_fd is not None:
             try:
                 os.close(self._notify_fd)

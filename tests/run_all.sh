@@ -35,6 +35,10 @@ echo "=== Regularite d'arrivee des images (gigue) ==="
 "$PYTHON" tests/test_frame_pacing.py
 
 echo
+echo "=== Cadencement par les balayages du panneau, pyxel.step (W574) ==="
+"$PYTHON" tests/test_vsync_pacing.py
+
+echo
 echo "=== Vrai noyau spyder-kernels (le plus proche du reel) ==="
 "$PYTHON" tests/test_real_kernel.py
 

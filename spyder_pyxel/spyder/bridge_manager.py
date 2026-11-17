@@ -30,6 +30,7 @@ fois, puisque pyxel.run() le bloque jusqu'a la fin.
 from qtpy.QtCore import QObject, QSocketNotifier, QTimer, Signal
 
 from spyder_pyxel.bridge import protocol, reader
+from spyder_pyxel.spyder.vsync import VsyncTicker
 
 # Cadence de relecture des canaux.
 #
@@ -105,6 +106,9 @@ class PyxelBridge(QObject):
         self._timer.timeout.connect(self._poll)
         self._notifiers = {}
         self._subscribers = 0
+        # W574 : balayages de l'ecran envoyes aux jeux (pyxel.step), tant qu'un panneau
+        # est visible ; sinon les jeux se cadencent sur leur propre horloge.
+        self._vsync = VsyncTicker(self._send_vsync_tick, self)
 
     # --- Consoles ------------------------------------------------------------
 
@@ -418,6 +422,20 @@ class PyxelBridge(QObject):
         self._subscribers = max(0, self._subscribers - 1)
         if self._subscribers == 0:
             self._timer.stop()
+            self.stop_vsync()
+
+    def start_vsync(self, window):
+        """Un panneau visible prete sa fenetre : ses balayages cadencent les jeux."""
+        self._vsync.start(window)
+
+    def stop_vsync(self):
+        self._vsync.stop()
+        for channel in list(self._channels.values()):
+            channel.stop_vsync()
+
+    def _send_vsync_tick(self, hz):
+        for channel in list(self._channels.values()):
+            channel.send_vsync_tick(hz)
 
     # --- Boucle de relecture --------------------------------------------------
 
